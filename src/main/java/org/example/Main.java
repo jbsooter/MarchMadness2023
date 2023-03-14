@@ -1,18 +1,18 @@
 package org.example;
 
-import smile.base.cart.Loss;
-import smile.base.cart.SplitRule;
-import smile.classification.RandomForest;
 import smile.data.formula.Formula;
 import smile.classification.GradientTreeBoost;
 import smile.validation.Accuracy;
+import tech.tablesaw.api.DoubleColumn;
 import tech.tablesaw.api.IntColumn;
-import tech.tablesaw.api.NumberColumn;
+import tech.tablesaw.api.StringColumn;
 import tech.tablesaw.api.Table;
 import tech.tablesaw.io.csv.CsvReadOptions;
+import tech.tablesaw.plotly.Plot;
+import tech.tablesaw.plotly.api.HorizontalBarPlot;
 
-import java.sql.SQLOutput;
 import java.util.Arrays;
+import java.util.List;
 
 import static tech.tablesaw.aggregate.AggregateFunctions.*;
 
@@ -24,63 +24,37 @@ public class Main {
         //data after 2022
         mGameData = mGameData.where(mGameData.intColumn("Season").isGreaterThan(2022));
 
-        Table winData =
-                mGameData.summarize(mGameData.column(8),
-                mGameData.column(9),
-                        mGameData.column(10),
-                        mGameData.column(11),
-                        count,sum).by(mGameData.intColumn("WTeamID"));
+        //summarize counts and sums of datapoints for winners and losers
+        List<String> wAttributes = List.of("WFGM","WFGA","WFGM3","WFGA3","WFTM","WFTA","WOR","WDR","WAst","WTO","WStl","WBlk","WPF");
+        List<String> lAttributes = List.of("LFGM","LFGA","LFGM3","LFGA3","LFTM","LFTA","LOR","LDR","LAst","LTO","LStl","LBlk","LPF");
+        Table winData = mGameData.summarize(wAttributes,count,sum).by(mGameData.intColumn("WTeamID"));
+        Table lossData = mGameData.summarize(lAttributes,count,sum).by(mGameData.intColumn("LTeamID"));
 
-        Table lossData = mGameData.summarize(mGameData.column(21),
-                mGameData.column(22),
-                mGameData.column(23),
-                mGameData.column(24),
-                count,sum).by(mGameData.intColumn("LTeamID"));
-
-        lossData.column("LTeamID").setName("WTeamID");
-        //System.out.println(lossData);
-
-        //sum and count data for wins and losses by team ID
-        Table totalData = winData.joinOn("WTeamID").inner(lossData);
-
-        //System.out.println(totalData);
+        //join sum and count measures for wins and losses by same team
+        Table totalData = winData.joinOn("WTeamID").inner(lossData,"LTeamID");
+        totalData.column("WTeamID").setName("TeamID");
 
         //create season averages for model
-        Table modelData = Table.create(totalData.column("WTeamID").setName("TeamID"));
+        Table modelData = Table.create(totalData.column("TeamID"));
 
-        modelData.addColumns(
-                totalData.numberColumn("Sum [WFGA3]").add(totalData.numberColumn("Sum [LFGA3]")).divide(totalData.numberColumn("Count [WFGA3]").add(totalData.numberColumn("Count [LFGA3]"))).setName("FGA3"));
-
-        modelData.addColumns(
-                totalData.numberColumn("Sum [WFGA]").add(totalData.numberColumn("Sum [LFGA]")).divide(totalData.numberColumn("Count [WFGA]").add(totalData.numberColumn("Count [LFGA]"))).setName("FGA"));
-
-        modelData.addColumns(
-                totalData.numberColumn("Sum [WFGM3]").add(totalData.numberColumn("Sum [LFGM3]")).divide(totalData.numberColumn("Count [WFGM3]").add(totalData.numberColumn("Count [LFGM3]"))).setName("FGM3"));
-
-        modelData.addColumns(
-                totalData.numberColumn("Sum [WFGM]").add(totalData.numberColumn("Sum [LFGM]")).divide(totalData.numberColumn("Count [WFGM]").add(totalData.numberColumn("Count [LFGM]"))).setName("FGM"));
-
-
-        //System.out.println(modelData);
+        for(int i = 0; i < lAttributes.size();i++)
+        {
+            modelData.addColumns(totalData.numberColumn(String.format("Sum [%s]",wAttributes.get(i))).add(totalData.numberColumn(String.format("Sum [%s]",lAttributes.get(i)))).divide(totalData.numberColumn(String.format("Count [%s]",wAttributes.get(i))).add(totalData.numberColumn(String.format("Count [%s]",lAttributes.get(i))))).setName(wAttributes.get(i).substring(1)));
+        }
 
         //join season averages to games
         Table withOutcomes = Table.create(mGameData.column("WTeamID").copy(),mGameData.column("WTeamID").setName("TeamA"),mGameData.column("LTeamID").setName("TeamB"));
 
-        //System.out.println(withOutcomes);
-
-        for(int i = 0; i < withOutcomes.rowCount();i++)
-        {
-            if(Math.random() > 0.5)
-            {
-                withOutcomes.row(i).setInt(1,withOutcomes.row(i).getInt("TeamB"));
-                withOutcomes.row(i).setInt(2,withOutcomes.row(i).getInt("WTeamID"));
-
+        for(int i = 0; i < withOutcomes.rowCount();i++) {
+            if (Math.random() > 0.5) {
+                withOutcomes.row(i).setInt(1, withOutcomes.row(i).getInt("TeamB"));
+                withOutcomes.row(i).setInt(2, withOutcomes.row(i).getInt("WTeamID"));
             }
         }
-
+        //add column to represent Y
         IntColumn teamAW = IntColumn.create("TeamAWin");
 
-
+        //mix up team A and B so that each col is a mixture of winners and losers
         for(int i = 0; i < withOutcomes.rowCount();i++)
         {
             if(withOutcomes.row(i).getInt("TeamA") == withOutcomes.row(i).getInt("WTeamID"))
@@ -92,26 +66,24 @@ public class Main {
             }
         }
 
+        //add AW ahead of join
         withOutcomes.addColumns(teamAW);
-
-
-        //System.out.println(withOutcomes);
-
-
         Table finalData = withOutcomes.joinOn("TeamA").inner(modelData,"TeamID");
 
-        for(int i = 1; i < 5;i++)
+        //rename columns with B so that they can be joined later
+        for(int i = 1; i < modelData.columnCount();i++)
         {
             modelData.column(i).setName(modelData.column(i).name() + "B");
         }
 
         finalData = finalData.joinOn("TeamB").inner(modelData,"TeamID");
-        //System.out.println(finalData);
         finalData.removeColumns("WTeamID");
 
-        System.out.println(finalData);
 
-        //Split the data 70% test, 30% train
+        //TODO: remove columns not desired as features,
+        //finalData = finalData.removeColumns("PF","AstB","Stl","DRB","TO","BlkB","OR","ORB","StlB","TOB","FTMB","PFB","Ast","FTA","FTM","DR","Blk","FTAB");
+
+        //Split the data 80% test, 20% train
         Table[] splitData = finalData.sampleSplit(0.8);
         Table dataTrain = splitData[0];
         Table dataTest = splitData[1];
@@ -120,7 +92,6 @@ public class Main {
         GradientTreeBoost GBModel1 = GradientTreeBoost.fit(
                 Formula.lhs("TeamAWin"),
                 dataTrain.smile().toDataFrame(),
-
                 500, //n
                 (int) Math.sqrt((double) (dataTrain.columnCount() - 1)), //m = sqrt(p)
                 100, //d
@@ -144,42 +115,40 @@ public class Main {
                         .header(true)			;								// no header	        ;// the date format to use.
 
         Table r64Matchups = Table.read().usingOptions(builder);
-        //System.out.println(r64Matchups);
+        r64Matchups.addColumns(IntColumn.create("TeamAWin"));
 
-        for(int i = 1; i < 5;i++)
+        //remove B subscripts
+        for(int i = 1; i < modelData.columnCount();i++)
         {
             modelData.column(i).setName(modelData.column(i).name().substring(0,modelData.column(i).name().length()-1));
         }
+        //add team A stats to r64 table
         r64Matchups = r64Matchups.joinOn("IDTeamA").inner(modelData,"TeamID");
-        //System.out.println(r64Matchups);
 
-        for(int i = 1; i < 5;i++)
+        //add b subscirpts
+        for(int i = 1; i < modelData.columnCount();i++)
         {
             modelData.column(i).setName(modelData.column(i).name() + "B");
         }
 
+        //add B stats to table
         r64Matchups = r64Matchups.joinOn("IDTeamB").inner(modelData,"TeamID");
-        //System.out.println(r64Matchups);
 
         r64Matchups.column("IDTeamA").setName("TeamA");
         r64Matchups.column("IDTeamB").setName("TeamB");
-        r64Matchups.addColumns(IntColumn.create("TeamAWin"));
-
 
         r64Matchups.removeColumns("SeedA","SeedB");
 
-        r64Matchups = Table.create(r64Matchups.column(0),r64Matchups.column(1),r64Matchups.column(10),r64Matchups.column(2),r64Matchups.column(3),r64Matchups.column(4),r64Matchups.column(5),r64Matchups.column(6),r64Matchups.column(7),r64Matchups.column(8),r64Matchups.column(9));
-        //get pred
 
-        //predict the response of test dataset with GBModel1
+        //predict the response for upcoming first cound games
         int[] predictionsR64 = GBModel1.predict(r64Matchups.smile().toDataFrame());
 
-        //System.out.println(Arrays.toString(predictionsR64));
+        //print matrix and add to r64 table
+        System.out.println(Arrays.toString(predictionsR64));
         r64Matchups.removeColumns("TeamAWin");
         r64Matchups.addColumns(IntColumn.create("TeamAWin",predictionsR64));
 
-        //System.out.println(r64Matchups);
-
+        //remove unneeded info
         teamKeys.removeColumns("FirstD1Season","LastD1Season");
 
         Table output = r64Matchups.joinOn("TeamA").inner(teamKeys,"TeamID");
@@ -191,5 +160,16 @@ public class Main {
         //Write first round predictions
         output.write().csv("Boostingr64Predictions.csv");
 
+        //check variable importance for current model
+        double[] GBModel1_Importance = GBModel1.importance();
+        System.out.println(Arrays.toString(GBModel1_Importance));
+
+        //plot variable importance with tablesaw
+        Table varImportance = Table.create("featureImportance");
+        List<String> featureNames = dataTrain.columnNames();
+        featureNames.remove(2); //remove response (TeamAWin)
+        varImportance.addColumns(DoubleColumn.create("featureImportance", GBModel1_Importance), StringColumn.create("Feature",  featureNames));
+        varImportance = varImportance.sortDescendingOn("featureImportance");
+        Plot.show(HorizontalBarPlot.create("Feature Importance", varImportance, "Feature", "featureImportance"));
     }
 }
