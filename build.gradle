@@ -1,0 +1,30 @@
+plugins {
+    id 'java'
+}
+
+group 'org.example'
+version '1.0-SNAPSHOT'
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    testImplementation 'org.junit.jupiter:junit-jupiter-api:5.8.1'
+    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.8.1'
+    //Gradle
+// https://mvnrepository.com/artifact/com.github.haifengl/smile-core
+    implementation group: 'com.github.haifengl', name: 'smile-core', version: '2.0.0'
+
+    // https://mvnrepository.com/artifact/tech.tablesaw/tablesaw-core
+    implementation group: 'tech.tablesaw', name: 'tablesaw-core', version: '0.43.1'
+
+    // https://mvnrepository.com/artifact/tech.tablesaw/tablesaw-jsplot
+    implementation group: 'tech.tablesaw', name: 'tablesaw-jsplot', version: '0.43.1'
+
+
+}
+
+test {
+    useJUnitPlatform()
+}
