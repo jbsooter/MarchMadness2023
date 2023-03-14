@@ -21,10 +21,11 @@ public class Main {
         //read in game data
         Table mGameData = Table.read().csv("data/MRegularSeasonDetailedResults.csv");
 
-        //data after 2022
+        //Include data from this season only
         mGameData = mGameData.where(mGameData.intColumn("Season").isGreaterThan(2022));
 
-        //summarize counts and sums of datapoints for winners and losers
+        //summarize counts and sums of datapoints for winners and losers (aggregating to the per team, game average level
+        //TODO: cut down feature set here
         List<String> wAttributes = List.of("WFGM","WFGA","WFGM3","WFGA3","WFTM","WFTA","WOR","WDR","WAst","WTO","WStl","WBlk","WPF");
         List<String> lAttributes = List.of("LFGM","LFGA","LFGM3","LFGA3","LFTM","LFTA","LOR","LDR","LAst","LTO","LStl","LBlk","LPF");
         Table winData = mGameData.summarize(wAttributes,count,sum).by(mGameData.intColumn("WTeamID"));
@@ -37,14 +38,16 @@ public class Main {
         //create season averages for model
         Table modelData = Table.create(totalData.column("TeamID"));
 
+        //create averages from winSum,winCount,loseSum,loseCount for every feature
         for(int i = 0; i < lAttributes.size();i++)
         {
             modelData.addColumns(totalData.numberColumn(String.format("Sum [%s]",wAttributes.get(i))).add(totalData.numberColumn(String.format("Sum [%s]",lAttributes.get(i)))).divide(totalData.numberColumn(String.format("Count [%s]",wAttributes.get(i))).add(totalData.numberColumn(String.format("Count [%s]",lAttributes.get(i))))).setName(wAttributes.get(i).substring(1)));
         }
 
-        //join season averages to games
+        //join season averages to invividual games
         Table withOutcomes = Table.create(mGameData.column("WTeamID").copy(),mGameData.column("WTeamID").setName("TeamA"),mGameData.column("LTeamID").setName("TeamB"));
 
+        //assign half of winningTeams to be TeamB, half TeamA (So that the TeamAWin column is useful as Y)
         for(int i = 0; i < withOutcomes.rowCount();i++) {
             if (Math.random() > 0.5) {
                 withOutcomes.row(i).setInt(1, withOutcomes.row(i).getInt("TeamB"));
@@ -54,7 +57,7 @@ public class Main {
         //add column to represent Y
         IntColumn teamAW = IntColumn.create("TeamAWin");
 
-        //mix up team A and B so that each col is a mixture of winners and losers
+        //Fill TeamAWin column with appropriate 1 or 0 indicator
         for(int i = 0; i < withOutcomes.rowCount();i++)
         {
             if(withOutcomes.row(i).getInt("TeamA") == withOutcomes.row(i).getInt("WTeamID"))
@@ -66,7 +69,7 @@ public class Main {
             }
         }
 
-        //add AW ahead of join
+        //add AW ahead of join (as join does not guarantee order)
         withOutcomes.addColumns(teamAW);
         Table finalData = withOutcomes.joinOn("TeamA").inner(modelData,"TeamID");
 
@@ -76,12 +79,9 @@ public class Main {
             modelData.column(i).setName(modelData.column(i).name() + "B");
         }
 
+        //join team B stats
         finalData = finalData.joinOn("TeamB").inner(modelData,"TeamID");
         finalData.removeColumns("WTeamID");
-
-
-        //TODO: remove columns not desired as features,
-        //finalData = finalData.removeColumns("PF","AstB","Stl","DRB","TO","BlkB","OR","ORB","StlB","TOB","FTMB","PFB","Ast","FTA","FTM","DR","Blk","FTAB");
 
         //Split the data 80% test, 20% train
         Table[] splitData = finalData.sampleSplit(0.8);
@@ -89,10 +89,11 @@ public class Main {
         Table dataTest = splitData[1];
 
         //Try Gradient Boosting
+        //TODO: hyperparameter tuning
         GradientTreeBoost GBModel1 = GradientTreeBoost.fit(
                 Formula.lhs("TeamAWin"),
                 dataTrain.smile().toDataFrame(),
-                500, //n
+                5000, //n
                 (int) Math.sqrt((double) (dataTrain.columnCount() - 1)), //m = sqrt(p)
                 100, //d
                 5,
@@ -140,7 +141,7 @@ public class Main {
         r64Matchups.removeColumns("SeedA","SeedB");
 
 
-        //predict the response for upcoming first cound games
+        //predict the response for upcoming first round games
         int[] predictionsR64 = GBModel1.predict(r64Matchups.smile().toDataFrame());
 
         //print matrix and add to r64 table
@@ -157,7 +158,7 @@ public class Main {
         output.column("TeamName").setName("TeamBName");
 
 
-        //Write first round predictions
+        //Write first round predictions to csv
         output.write().csv("Boostingr64Predictions.csv");
 
         //check variable importance for current model
