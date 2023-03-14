@@ -9,8 +9,10 @@ import smile.validation.Accuracy;
 import tech.tablesaw.api.IntColumn;
 import tech.tablesaw.api.NumberColumn;
 import tech.tablesaw.api.Table;
+import tech.tablesaw.io.csv.CsvReadOptions;
 
 import java.sql.SQLOutput;
+import java.util.Arrays;
 
 import static tech.tablesaw.aggregate.AggregateFunctions.*;
 
@@ -19,8 +21,8 @@ public class Main {
         //read in game data
         Table mGameData = Table.read().csv("data/MRegularSeasonDetailedResults.csv");
 
-        //data after 2015
-        mGameData = mGameData.where(mGameData.intColumn("Season").isGreaterThan(2015));
+        //data after 2022
+        mGameData = mGameData.where(mGameData.intColumn("Season").isGreaterThan(2022));
 
         Table winData =
                 mGameData.summarize(mGameData.column(8),
@@ -59,12 +61,12 @@ public class Main {
                 totalData.numberColumn("Sum [WFGM]").add(totalData.numberColumn("Sum [LFGM]")).divide(totalData.numberColumn("Count [WFGM]").add(totalData.numberColumn("Count [LFGM]"))).setName("FGM"));
 
 
-        System.out.println(modelData);
+        //System.out.println(modelData);
 
         //join season averages to games
         Table withOutcomes = Table.create(mGameData.column("WTeamID").copy(),mGameData.column("WTeamID").setName("TeamA"),mGameData.column("LTeamID").setName("TeamB"));
 
-        System.out.println(withOutcomes);
+        //System.out.println(withOutcomes);
 
         for(int i = 0; i < withOutcomes.rowCount();i++)
         {
@@ -93,7 +95,7 @@ public class Main {
         withOutcomes.addColumns(teamAW);
 
 
-        System.out.println(withOutcomes);
+        //System.out.println(withOutcomes);
 
 
         Table finalData = withOutcomes.joinOn("TeamA").inner(modelData,"TeamID");
@@ -104,47 +106,26 @@ public class Main {
         }
 
         finalData = finalData.joinOn("TeamB").inner(modelData,"TeamID");
+        //System.out.println(finalData);
+        finalData.removeColumns("WTeamID");
+
         System.out.println(finalData);
 
-
         //Split the data 70% test, 30% train
-        Table[] splitData = finalData.sampleSplit(0.7);
+        Table[] splitData = finalData.sampleSplit(0.8);
         Table dataTrain = splitData[0];
         Table dataTest = splitData[1];
 
-        //Try RandomForest
-        //initial model with sensible parameters
-        RandomForest RFModel1 = smile.classification.RandomForest.fit(
-                Formula.lhs("TeamAWin"),
-                dataTrain.smile().toDataFrame(),
-                50, //n
-                (int) Math.sqrt((double) (dataTrain.columnCount() - 1)), //m = sqrt(p)
-                SplitRule.GINI,
-                10, //d
-                100, //maxNodes
-                1,
-                1
-        );
-
-
-        //predict the response of test dataset with RFModel1
-        int[] predictions = RFModel1.predict(dataTest.smile().toDataFrame());
-
-        //evaluate % classification accuracy for RFModel1
-        double accuracy1 = Accuracy.of(dataTest.intColumn("TeamAWin").asIntArray(), predictions);
-        System.out.println(accuracy1);
-
-
-        //TryBoosting
+        //Try Gradient Boosting
         GradientTreeBoost GBModel1 = GradientTreeBoost.fit(
                 Formula.lhs("TeamAWin"),
                 dataTrain.smile().toDataFrame(),
 
-                50, //n
+                500, //n
                 (int) Math.sqrt((double) (dataTrain.columnCount() - 1)), //m = sqrt(p)
-                10, //d
-                100, //maxNodes
-                1.0,
+                100, //d
+                5,
+                0.3,
                 1
         );
 
@@ -155,7 +136,60 @@ public class Main {
         double accuracyGB = Accuracy.of(dataTest.intColumn("TeamAWin").asIntArray(), predictionsGB);
         System.out.println(accuracyGB);
 
+        //Create data for actual first round games
+        Table teamKeys = Table.read().csv("data/MTeams.csv");
+        CsvReadOptions.Builder builder =
+                CsvReadOptions.builder("data/r64Matchups.csv")
+                        .separator('\t')										// table is tab-delimited
+                        .header(true)			;								// no header	        ;// the date format to use.
 
+        Table r64Matchups = Table.read().usingOptions(builder);
+        //System.out.println(r64Matchups);
+
+        for(int i = 1; i < 5;i++)
+        {
+            modelData.column(i).setName(modelData.column(i).name().substring(0,modelData.column(i).name().length()-1));
+        }
+        r64Matchups = r64Matchups.joinOn("IDTeamA").inner(modelData,"TeamID");
+        //System.out.println(r64Matchups);
+
+        for(int i = 1; i < 5;i++)
+        {
+            modelData.column(i).setName(modelData.column(i).name() + "B");
+        }
+
+        r64Matchups = r64Matchups.joinOn("IDTeamB").inner(modelData,"TeamID");
+        //System.out.println(r64Matchups);
+
+        r64Matchups.column("IDTeamA").setName("TeamA");
+        r64Matchups.column("IDTeamB").setName("TeamB");
+        r64Matchups.addColumns(IntColumn.create("TeamAWin"));
+
+
+        r64Matchups.removeColumns("SeedA","SeedB");
+
+        r64Matchups = Table.create(r64Matchups.column(0),r64Matchups.column(1),r64Matchups.column(10),r64Matchups.column(2),r64Matchups.column(3),r64Matchups.column(4),r64Matchups.column(5),r64Matchups.column(6),r64Matchups.column(7),r64Matchups.column(8),r64Matchups.column(9));
+        //get pred
+
+        //predict the response of test dataset with GBModel1
+        int[] predictionsR64 = GBModel1.predict(r64Matchups.smile().toDataFrame());
+
+        //System.out.println(Arrays.toString(predictionsR64));
+        r64Matchups.removeColumns("TeamAWin");
+        r64Matchups.addColumns(IntColumn.create("TeamAWin",predictionsR64));
+
+        //System.out.println(r64Matchups);
+
+        teamKeys.removeColumns("FirstD1Season","LastD1Season");
+
+        Table output = r64Matchups.joinOn("TeamA").inner(teamKeys,"TeamID");
+        output.column("TeamName").setName("TeamAName");
+        output = output.joinOn("TeamB").inner(teamKeys,"TeamID");
+        output.column("TeamName").setName("TeamBName");
+
+
+        //Write first round predictions
+        output.write().csv("Boostingr64Predictions.csv");
 
     }
 }
