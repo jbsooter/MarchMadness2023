@@ -44,6 +44,13 @@ public class Main {
             modelData.addColumns(totalData.numberColumn(String.format("Sum [%s]",wAttributes.get(i))).add(totalData.numberColumn(String.format("Sum [%s]",lAttributes.get(i)))).divide(totalData.numberColumn(String.format("Count [%s]",wAttributes.get(i))).add(totalData.numberColumn(String.format("Count [%s]",lAttributes.get(i))))).setName(wAttributes.get(i).substring(1)));
         }
 
+        //join 2023 conference data to modelData and convert to int
+        Table conferenceID = Table.read().csv("data/MTeamConferences.csv");
+        conferenceID = conferenceID.where(conferenceID.intColumn("Season").isEqualTo(2023));
+        conferenceID.removeColumns("Season");
+        modelData = modelData.joinOn("TeamID").inner(conferenceID,"TeamID");
+        modelData.replaceColumn("ConfAbbrev",modelData.stringColumn("ConfAbbrev").asDoubleColumn().asIntColumn());
+
         //join season averages to invividual games
         Table withOutcomes = Table.create(mGameData.column("WTeamID").copy(),mGameData.column("WTeamID").setName("TeamA"),mGameData.column("LTeamID").setName("TeamB"));
 
@@ -93,11 +100,11 @@ public class Main {
         GradientTreeBoost GBModel1 = GradientTreeBoost.fit(
                 Formula.lhs("TeamAWin"),
                 dataTrain.smile().toDataFrame(),
-                5000, //n
+                10000, //n
                 (int) Math.sqrt((double) (dataTrain.columnCount() - 1)), //m = sqrt(p)
-                100, //d
+                7, //d
                 5,
-                0.3,
+                0.0005,
                 1
         );
 
