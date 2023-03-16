@@ -4,5 +4,12 @@
 
 Using a dataset of 13 season-average team statistics from 2023, gradient boosting is used to predict winners in the round of 64. These results will be compared to the average accuracy in the ESPN Bracket Challenge. 
 
+### Model Picks:
+
+See picks with predictors -->  **Boostingr64Predictions.csv**
+
+![](images/left-bracket.png)
+![](images/right-bracket.png)
+
 
 Data Source: https://www.kaggle.com/competitions/march-machine-learning-mania-2023/data
